@@ -21,7 +21,8 @@ class LLMCallConfig(NamedTuple):
     timeout: int = 120
     schema: dict | None = None
     max_turns: int | None = None
-    transport: str = "cc"
+    # None = 跟随 SIFT_LLM_TRANSPORT；未设置时保持 cc。
+    transport: str | None = None
     max_tokens: int | None = None
 
 
@@ -152,6 +153,17 @@ def resolve_http_model(model: str | None) -> str:
         )
     i = model.find("[")
     return model[:i] if i != -1 else model
+
+
+def resolve_llm_transport(configured: str | None) -> str:
+    """显式 transport 优先；否则读取 SIFT_LLM_TRANSPORT，最终回退 cc。"""
+    transport = (configured or os.environ.get("SIFT_LLM_TRANSPORT") or "cc").strip().lower()
+    if transport not in {"cc", "http"}:
+        raise RuntimeError(
+            f"未知 LLM transport: {transport!r}；只支持 cc / http"
+            "（可通过 SIFT_LLM_TRANSPORT 设置）"
+        )
+    return transport
 
 
 def _pick_tool_items(obj: dict):
@@ -441,8 +453,9 @@ def call_claude(
 
     模型、超时、schema、轮次和传输设置由 ``config`` 提供；用量及进度回调独立传入。
 
-    ``transport``(代码级,默认 ``"cc"``):``"cc"`` → cc CLI(``call_cli``);
-    ``"http"`` → 裸 HTTP 直连(``call_http``,省 cc 进程 spawn + ~25k 系统 prompt/批,
+    ``transport``(代码级):显式值优先；未指定时读 ``SIFT_LLM_TRANSPORT``，最终默认
+    ``"cc"``。``"cc"`` → cc CLI(``call_cli``);``"http"`` → 裸 HTTP 直连
+    (``call_http``,省 cc 进程 spawn + ~25k 系统 prompt/批,
     forced tool_use 保 schema)。裸 HTTP 撞 529(后端过载/身份限流)/ forced tool_use 拿不到
     tool_use 块(GLM 只回 thinking / thinking 撑满 ``HTTP_MAX_TOKENS`` → ``HttpNoToolUse``)
     → 回退 cc(cc 多轮催出 + 降级文本兜底);其余 HTTP 错(4xx/timeout→RuntimeError)不回退
@@ -455,7 +468,7 @@ def call_claude(
     timeout = config.timeout
     schema = config.schema
     max_turns = config.max_turns
-    transport = config.transport
+    transport = resolve_llm_transport(config.transport)
     max_tokens = config.max_tokens
     if transport == "http":
         try:

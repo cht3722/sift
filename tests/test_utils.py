@@ -1085,10 +1085,30 @@ def test_token_accumulator_ignores_truncated_field():
 # ── call_claude transport 调度:cc(默认)/ http(529→cc 兜底)──
 
 
-def test_call_claude_default_transport_is_cc(monkeypatch):
-    """不传 transport → 默认 cc → call_http 绝不被调。"""
+def test_resolve_llm_transport_precedence(monkeypatch):
     import sift.llm_transport as u
 
+    monkeypatch.setenv("SIFT_LLM_TRANSPORT", "http")
+    assert u.resolve_llm_transport(None) == "http"
+    assert u.resolve_llm_transport("cc") == "cc"
+    assert LLMCallConfig().transport is None
+
+
+def test_resolve_llm_transport_defaults_and_rejects_unknown(monkeypatch):
+    import sift.llm_transport as u
+
+    monkeypatch.delenv("SIFT_LLM_TRANSPORT", raising=False)
+    assert u.resolve_llm_transport(None) == "cc"
+    monkeypatch.setenv("SIFT_LLM_TRANSPORT", "wat")
+    with pytest.raises(RuntimeError, match="SIFT_LLM_TRANSPORT"):
+        u.resolve_llm_transport(None)
+
+
+def test_call_claude_default_transport_is_cc(monkeypatch):
+    """不传 transport 且未设 env → 默认 cc → call_http 绝不被调。"""
+    import sift.llm_transport as u
+
+    monkeypatch.delenv("SIFT_LLM_TRANSPORT", raising=False)
     monkeypatch.setattr(u, "call_cli", lambda *a, **k: "cc-out")
     monkeypatch.setattr(
         u,
