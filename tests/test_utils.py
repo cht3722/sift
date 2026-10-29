@@ -606,6 +606,26 @@ def test_http_call_schema_none_uses_result_envelope(monkeypatch):
     assert out == '{"ok": true}'
 
 
+@pytest.mark.parametrize("input_value", [{}, {"not_result": "x"}, {"result": 123}])
+def test_http_call_schema_none_empty_or_invalid_result_raises_no_tool_use(monkeypatch, input_value):
+    """Generic result envelope must contain a string result, otherwise fall back."""
+    import sift.llm_transport as u
+
+    monkeypatch.setattr(
+        u.urllib.request,
+        "urlopen",
+        lambda req, timeout=None: _FakeResp(
+            {
+                "content": [{"type": "tool_use", "input": input_value}],
+                "usage": {"input_tokens": 3, "output_tokens": 2},
+            }
+        ),
+    )
+    _http_env(monkeypatch)
+    with pytest.raises(u.HttpNoToolUse, match="generic result"):
+        u.call_http(prompt="p", on_usage=None, config=LLMCallConfig(model="m", timeout=60))
+
+
 def test_http_call_reports_usage_with_cost_zero(monkeypatch):
     """裸 API 不返 cost → payload 补 total_cost_usd=0(对齐 call_claude 形状)。"""
     import sift.llm_transport as u

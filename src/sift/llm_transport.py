@@ -323,6 +323,16 @@ def call_http(prompt, config: LLMCallConfig, on_usage, on_progress=None, max_tok
             stop_reason=obj.get("stop_reason"),
         )
     text_result = tool_items.get("result") if generic_text_result and isinstance(tool_items, dict) else None
+    if generic_text_result and not isinstance(text_result, str):
+        # Some Anthropic-compatible endpoints return a tool_use block with an
+        # empty input (or omit ``result``). Treat that as a failed forced-tool
+        # call so the dispatcher can fall back instead of returning ``{}`` to
+        # callers that would silently create an empty report/eval case.
+        raise HttpNoToolUse(
+            "裸 HTTP generic result 无效(result 缺失或不是字符串): "
+            f"{str(obj)[:300]}",
+            stop_reason=obj.get("stop_reason"),
+        )
     # warn 只打在**最终被下游消费**的截断结果上(截断但有 tool_use、要交给 parser 的)——
     # 这才是 parser 可能 parse_failed 的真风险点;升档/cc 回退路上的中间截断由进度行叙事,
     # 不打 Python UserWarning(被救回的截断满屏 warn 只会像出了 bug,真跑反馈)。

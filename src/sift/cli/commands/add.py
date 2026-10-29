@@ -122,7 +122,12 @@ def add(cli_options: AddCommandOptions):
 
 def _choose_new_eval(cli_options, skill_path):
     if cli_options.idea:
-        if resolve_llm_transport(None) == "cc":
+        try:
+            transport = resolve_llm_transport(None)
+        except RuntimeError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(code=3) from exc
+        if transport == "cc":
             _check_claude_or_exit()
         usage: dict = {}
         start = time.perf_counter()
