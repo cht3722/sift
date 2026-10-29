@@ -27,6 +27,7 @@ class TriggerCommandOptions:
     runs: int = typer.Option(1, "--runs", help="每 probe 重复跑几次(置信度)")
     timeout: int = typer.Option(120, "--timeout")
     max_turns: int = typer.Option(10, "--max-turns")
+    executor: str = typer.Option("cc", "--executor", help="触发执行器:cc（默认）/ dsh")
     evals_file: Optional[Path] = typer.Option(None, "--evals", help="evals.json 路径(默认 skill/evals/evals.json)")
     open_report: bool = typer.Option(False, "--open", help="写完后用浏览器打开 HTML 报告")
 
@@ -44,6 +45,9 @@ def trigger(cli_options: TriggerCommandOptions):
         if not probes:
             console.print(f"[yellow]⚠️ {ef} 无 trigger_probes(先跑 init --trigger-probes 生成)。[/yellow]")
             raise typer.Exit(code=0)
+        if cli_options.executor not in ("cc", "dsh"):
+            console.print(f"[red]Error:[/red] trigger --executor 只支持 cc / dsh,收到 {cli_options.executor!r}")
+            raise typer.Exit(code=2)
         out_dir = cli_options.output or (skill_path / "evals")
         out_dir.mkdir(parents=True, exist_ok=True)
         console.print(f"Trigger-testing [bold]{name}[/bold]({len(probes)} probes × {cli_options.runs} runs)...")
@@ -53,6 +57,7 @@ def trigger(cli_options: TriggerCommandOptions):
             timeout=cli_options.timeout,
             max_turns=cli_options.max_turns,
             runs=cli_options.runs,
+            executor=cli_options.executor,
         )
         res = runner.run(probes, out_dir, on_progress=lambda line: console.print(line))
         report = _trigger_report(name, description, cli_options.runs, res)

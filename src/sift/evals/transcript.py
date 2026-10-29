@@ -246,6 +246,110 @@ def stamp_turn_indices(records: list[dict]) -> None:
         r["_turn_index"] = i
 
 
+def _iter_dsh_events(path: Path):
+    """Yield valid JSON objects from a DSH headless ``--json`` NDJSON stream."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                logging.getLogger(__name__).debug(
+                    "Optional operation failed; continuing with fallback", exc_info=True
+                )
+                continue
+            if isinstance(event, dict):
+                yield event
+
+
+def _read_dsh_events(path: Path) -> list[dict]:
+    return list(_iter_dsh_events(path))
+
+
+def is_dsh_session(path: Path) -> bool:
+    """Return whether *path* starts with a DSH headless event stream."""
+    for index, event in enumerate(_iter_dsh_events(path)):
+        if index >= 8:
+            return False
+        if event.get("type") == "session" and "sessionId" in event:
+            return True
+    return False
+
+
+def _records_from_dsh(path: Path) -> list[dict]:
+    """DSH headless events -> canonical cc-record shape.
+
+    DSH deliberately exposes a small NDJSON projection (``text`` /
+    ``tool_call`` / ``tool_result`` / ``final``).  Sift's audit pipeline has one
+    canonical record representation, so normalize the DSH projection into
+    assistant tool_use records and user tool_result records.  Tool names are
+    normalized through the same map as the opencode importer.
+    """
+    records: list[dict] = []
+    emitted_texts: list[str] = []
+    for event in _read_dsh_events(path):
+        event_type = event.get("type")
+        if event_type == "task":
+            text = event.get("text")
+            if isinstance(text, str) and text.strip():
+                records.append({"message": {"role": "user", "content": text}})
+        elif event_type == "text":
+            text = event.get("text")
+            if isinstance(text, str) and text.strip():
+                emitted_texts.append(text)
+                records.append(
+                    {"message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+                )
+        elif event_type == "tool_call":
+            call_id = str(event.get("callId") or "")
+            raw_input = event.get("input")
+            tool_input = raw_input if isinstance(raw_input, dict) else {"arguments": raw_input}
+            records.append(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": call_id,
+                                "name": _norm_tool(str(event.get("tool") or "")),
+                                "input": tool_input,
+                            }
+                        ],
+                    }
+                }
+            )
+        elif event_type == "tool_result":
+            result = event.get("result")
+            if not isinstance(result, str):
+                result = json.dumps(result, ensure_ascii=False)
+            records.append(
+                {
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": str(event.get("callId") or ""),
+                                "content": result,
+                                "is_error": event.get("status") == "error",
+                            }
+                        ],
+                    }
+                }
+            )
+        elif event_type == "final":
+            text = event.get("text")
+            if isinstance(text, str) and text.strip() and text not in emitted_texts:
+                records.append(
+                    {"message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+                )
+    stamp_turn_indices(records)
+    return records
+
+
 def _records_from_cc(transcript_path: Path) -> list[dict]:
     """读 Claude Code session JSONL → record 列表（跳过空行 / 坏 JSON 行）。
 
@@ -488,6 +592,11 @@ def _digest_from_records(records: list[dict], root: str | None = None, *, locate
     for record in records:
         collected.record(record)
     return collected.finish(root)
+
+
+def build_digest_from_dsh(transcript_path: Path, root: str | None = None, *, locate_turns: bool = False) -> SessionDigest:
+    """DSH headless NDJSON -> SessionDigest via the shared canonical replayer."""
+    return _digest_from_records(_records_from_dsh(transcript_path), root, locate_turns=locate_turns)
 
 
 def build_digest(transcript_path: Path, root: str | None = None, *, locate_turns: bool = False) -> SessionDigest:

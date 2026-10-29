@@ -14,7 +14,7 @@ from pathlib import Path
 
 from sift.errors import SiftError
 from sift.evals.opencode import build_digest_from_opencode, is_opencode_session
-from sift.evals.transcript import SessionDigest, build_digest
+from sift.evals.transcript import SessionDigest, build_digest, build_digest_from_dsh, is_dsh_session
 from sift.models import ToolCallRecord
 
 
@@ -25,15 +25,16 @@ def rebuild(
 ) -> tuple[list[ToolCallRecord], str, SessionDigest]:
     """把 transcript 重建为 (tool_trace, transcript_text, digest)。
 
-    按 ``is_opencode_session`` 分派格式:.json+三键(session/messages/parts)走
+    按 ``is_dsh_session`` / ``is_opencode_session`` 分派格式:DSH headless NDJSON
+    走 ``build_digest_from_dsh``,.json+三键(session/messages/parts)走
     ``build_digest_from_opencode``,其余按 Claude Code session JSONL 走 ``build_digest``。
-    cc 路径零改动;空 digest 检查与三元组返回两路共用。
+    cc 路径零改动;空 digest 检查与三元组返回各路径共用。
 
     ``locate_turns`` 透传两路重建器(控 ``[T{idx}] `` 前缀与 ``ToolCallRecord.turn``):
     默认 ``False`` = no-seq 形态(不加前缀、turn 置 None);``True`` 开 turn 定位渲染。
 
     Args:
-        transcript_path: Claude Code session JSONL 或 opencode session JSON 路径。
+        transcript_path: Claude Code session JSONL、DSH headless NDJSON 或 opencode session JSON 路径。
 
     Returns:
         ``(digest.tool_trace, digest.transcript_text, digest)`` —— 三元组中
@@ -46,7 +47,9 @@ def rebuild(
     if not transcript_path.exists():
         raise SiftError(f"transcript 文件不存在: {transcript_path}")
 
-    if is_opencode_session(transcript_path):
+    if is_dsh_session(transcript_path):
+        digest = build_digest_from_dsh(transcript_path, locate_turns=locate_turns)
+    elif is_opencode_session(transcript_path):
         digest = build_digest_from_opencode(transcript_path, locate_turns=locate_turns)
     else:
         digest = build_digest(transcript_path, locate_turns=locate_turns)

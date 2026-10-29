@@ -35,6 +35,10 @@ class ClaudeRunnerError(ExecutionError):
     pass
 
 
+class DshRunnerError(ExecutionError):
+    pass
+
+
 class ScoringError(ExecutionError):
     pass
 

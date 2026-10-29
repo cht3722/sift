@@ -12,6 +12,7 @@ from rich.table import Table
 
 from sift.cli.helpers import (
     _check_claude_or_exit,
+    _check_dsh_or_exit,
     _discover_evals,
     _parse_eval_ids,
     _parse_eval_samples,
@@ -208,9 +209,9 @@ _RUN_TASK_HELP = (
 )
 
 _RUN_EXECUTOR_HELP = (
-    "执行器:cc(默认)/ opencode / cc,opencode(多执行器各跑一次)。注意 opencode "
+    "执行器:cc(默认)/ opencode / dsh / 逗号分隔多执行器(各跑一次)。注意 opencode "
     "无 --max-turns 对等,多执行器 sweep 时 cc 轮数有界、opencode "
-    "无界(已知不对称)"
+    "无界(已知不对称);dsh 使用 SIFT_DSH_PROFILE(默认 headless)"
 )
 
 
@@ -220,7 +221,11 @@ _EVALUATE_EVALS_OPTION = typer.Option(None, "--evals", help="Path to evals.json"
 
 _EVALUATE_RUNS_OPTION = typer.Option(1, "--runs", help="Number of runs per configuration")
 
-_EVALUATE_MODEL_OPTION = typer.Option(None, "--model", help="Model for claude -p")
+_EVALUATE_EXECUTOR_OPTION = typer.Option(
+    "cc", "--executor", help="Execution engine for eval tasks: cc (default) or dsh"
+)
+
+_EVALUATE_MODEL_OPTION = typer.Option(None, "--model", help="Model passed to the task executor")
 
 _EVALUATE_WORKERS_OPTION = typer.Option(4, "--workers", help="Max parallel workers")
 
@@ -308,6 +313,7 @@ class EvaluateCommandOptions:
     skill_path: Path = _EVALUATE_SKILL_PATH_ARGUMENT
     evals: Optional[Path] = _EVALUATE_EVALS_OPTION
     runs: int = _EVALUATE_RUNS_OPTION
+    executor: str = _EVALUATE_EXECUTOR_OPTION
     model: Optional[str] = _EVALUATE_MODEL_OPTION
     workers: int = _EVALUATE_WORKERS_OPTION
     timeout: int = _EVALUATE_TIMEOUT_OPTION
@@ -338,6 +344,7 @@ def evaluate(cli_options: EvaluateCommandOptions):
     """A/B 评测 skill(with/without 或 v1/v2);--kind agent 走绝对质量评测。"""
     run_config = RunConfig(
         runs_per_config=cli_options.runs,
+        executor=cli_options.executor,
         model=cli_options.model,
         max_workers=cli_options.workers,
         timeout_seconds=cli_options.timeout,
@@ -386,7 +393,14 @@ def _execute_evaluation_command(
 ) -> None:
     """验证声明和考卷，执行评测，再按依赖顺序生成附加报告。"""
     skill_path = resolve_skill_dir(skill_path)
-    eval_set = _prepare_evaluation(skill_path, command.evals, run_config.kind, options.skill_b, command.security_gate)
+    eval_set = _prepare_evaluation(
+        skill_path,
+        command.evals,
+        run_config.kind,
+        options.skill_b,
+        command.security_gate,
+        run_config.executor,
+    )
     if eval_set is None:
         return
     if run_config.runs_per_config < 3:
@@ -461,13 +475,15 @@ def run(cli_options: RunCommandOptions):
     skill_path = resolve_skill_dir(skill_path)
     # 执行器解析(提前到 cc-check 前,好按需 gate)
     exec_list = [e.strip() for e in (cli_options.executor or "cc").split(",") if e.strip()]
-    bad = [e for e in exec_list if e not in ("cc", "opencode")]
+    bad = [e for e in exec_list if e not in ("cc", "opencode", "dsh")]
     if bad:
-        console.print((f"[red]Error:[/red] 未知 executor: {', '.join(bad)}(支持: cc, opencode)"))
+        console.print((f"[red]Error:[/red] 未知 executor: {', '.join(bad)}(支持: cc, opencode, dsh)"))
         raise typer.Exit(code=2)
     # cc-check:cc 在 exec_list 时才需要(纯 opencode 不用 cc)
     if "cc" in exec_list:
         _check_claude_or_exit()
+    if "dsh" in exec_list:
+        _check_dsh_or_exit()
 
     if cli_options.security_gate:
         _run_security_gate(skill_path)
@@ -512,7 +528,14 @@ def run(cli_options: RunCommandOptions):
         console.print((f"\n[dim]Audit skill 遵循性:[/dim]\n  sift audit {skill_path} {args} -o /tmp/live-audit"))
 
 
-def _prepare_evaluation(skill_path: Path, evals: Path | None, kind: str, skill_b: Path | None, security_gate: bool):
+def _prepare_evaluation(
+    skill_path: Path,
+    evals: Path | None,
+    kind: str,
+    skill_b: Path | None,
+    security_gate: bool,
+    executor: str,
+):
     """检查运行模式和执行环境，读取题目并提示基线声明名不匹配。"""
     from sift.evals.loader import EvalLoader
 
@@ -522,8 +545,13 @@ def _prepare_evaluation(skill_path: Path, evals: Path | None, kind: str, skill_b
     if kind == "agent" and skill_b:
         console.print(("[red]Error:[/red] --kind agent 是绝对质量评测,与 --skill-b(A/B 对照)互斥"))
         raise typer.Exit(code=2)
-    # A/B 评测恒用 cc
-    _check_claude_or_exit()
+    if executor == "cc":
+        _check_claude_or_exit()
+    elif executor == "dsh":
+        _check_dsh_or_exit()
+    else:
+        console.print(f"[red]Error:[/red] eval --executor 只支持 cc / dsh,收到 {executor!r}")
+        raise typer.Exit(code=2)
 
     if security_gate:
         _run_security_gate(skill_path)

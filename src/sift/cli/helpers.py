@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 import typer
@@ -49,6 +51,16 @@ def _check_claude_or_exit() -> None:
         raise typer.Exit(code=3)
     lc = console
     lc.print(f"[dim]{ver_msg}[/dim]")
+
+
+def _check_dsh_or_exit() -> None:
+    """Fail before an eval/run starts when the configured DSH binary is absent."""
+    binary = os.environ.get("SIFT_DSH_BIN", "dsh")
+    if shutil.which(binary):
+        console.print(f"[dim]DSH executor: {binary} (profile={os.environ.get('SIFT_DSH_PROFILE', 'headless')})[/dim]")
+        return
+    console.print(f"[red]Error:[/red] dsh CLI not found ({binary}); install DSH or set SIFT_DSH_BIN")
+    raise typer.Exit(code=3)
 
 
 def _discover_evals(skill_path: Path) -> Path:

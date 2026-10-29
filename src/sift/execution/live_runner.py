@@ -1,8 +1,9 @@
 """路径1 真任务模式:不读 evals.json,直接 spawn 执行器在真实工作目录跑真实任务。
 
-执行器多态(默认 cc,opt-in opencode 经由 make_live_runner / executors 参数):
-cc spawn `claude -p` 真跑,opencode spawn `opencode run` 真跑 —— 同一考场、同一任务、
-同一 skill,各跑 N 次,公平对照。
+执行器多态(默认 cc,opt-in opencode/dsh 经由 make_live_runner / executors 参数):
+cc spawn `claude -p` 真跑,opencode spawn `opencode run` 真跑,dsh spawn
+`dsh --profile <headless> --json -` 真跑 —— 同一考场、同一任务、同一 skill,
+各跑 N 次,公平对照。
 
 区别于:
 - 路径3(evals.json fixture 剧本 spawn + scoring):任务源是 init 编的剧本 + fixture 数据;
@@ -47,7 +48,11 @@ def make_live_runner(name: str):
         from sift.execution.opencode_runner import OpenCodeRunner
 
         return OpenCodeRunner()
-    raise InputError(f"未知 executor: {name}(支持: cc, opencode)")
+    if name == "dsh":
+        from sift.execution.dsh_runner import DshRunner
+
+        return DshRunner()
+    raise InputError(f"未知 executor: {name}(支持: cc, opencode, dsh)")
 
 
 def run_live_task(skill_path: Path, task: str, options: LiveTaskOptions = LiveTaskOptions()) -> Path:

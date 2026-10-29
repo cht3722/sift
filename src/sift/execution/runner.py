@@ -25,6 +25,7 @@ from sift.execution.cli_runner import (  # noqa: F401 — re-exported for backwa
     ClaudeRunner,
     find_project_root,
 )
+from sift.execution.dsh_runner import DshRunner
 from sift.execution.options import ExecutionOptions
 from sift.execution.progress import ProgressUpdate
 from sift.models import (
@@ -396,7 +397,7 @@ class ABTestRunner:
     ):
         self.config = config
         self.scoring_config = scoring_config
-        self.runner = ClaudeRunner()
+        self.runner = DshRunner() if config.executor == "dsh" else ClaudeRunner()
         self.on_progress = on_progress
 
     @staticmethod

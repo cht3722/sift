@@ -29,12 +29,14 @@ ClaudeRunner.run_trigger spawn 路径)编排成端到端流水线:
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from pathlib import Path
 
 from sift.audit.slice import invoked_skills
 from sift.execution.cli_runner import ClaudeRunner
+from sift.execution.dsh_runner import DshRunner
 from sift.execution.options import ExecutionOptions
 from sift.models.eval_models import TriggerProbe
 from sift.parser import parse_skill_md
@@ -181,6 +183,7 @@ class TriggerRunner:
         max_turns: int = 10,
         runs: int = 1,
         workers: int = 4,
+        executor: str = "cc",
     ):
         """Args:
         skill_path: 被测 skill 目录(含 SKILL.md)。
@@ -191,7 +194,8 @@ class TriggerRunner:
         self.skill_path = Path(skill_path)
         # parse_skill_md 返 (name, description, content, frontmatter, body)
         self.name, self.description, *_ = parse_skill_md(self.skill_path)
-        self.runner = ClaudeRunner()
+        self.executor = executor
+        self.runner = DshRunner() if executor == "dsh" else ClaudeRunner()
         self.model = model
         self.timeout = timeout
         self.max_turns = max_turns
@@ -286,7 +290,8 @@ class TriggerRunner:
         其余文件/子目录(含 references/scripts 等触发后 cc 会读的附件)整树拷过去。
         """
         sandbox = base / f"probe-{probe_id}" / f"run-{run}"
-        dst = sandbox / ".claude" / "skills" / self.name
+        skill_root = ".dsh" if self.executor == "dsh" else ".claude"
+        dst = sandbox / skill_root / "skills" / self.name
         dst.mkdir(parents=True, exist_ok=True)
         for item in self.skill_path.iterdir():
             if item.name == ".claude":
@@ -322,7 +327,7 @@ class TriggerRunner:
         sandbox = self._sandbox_with_skill(out_base, probe.id, run)
         # claude_cli_env 补身份头(治限流)+ 继承终端 env(含真实 HOME → cc 能读认证文件/keyring)。
         # 不覆 HOME:cc 2.x plugin 不随 HOME(隔不掉),覆了反断认证(见 docstring)。
-        env = claude_cli_env()
+        env = os.environ.copy() if self.executor == "dsh" else claude_cli_env()
         out = self.runner.run_trigger(
             prompt=probe.prompt,
             cwd=sandbox,
@@ -336,5 +341,15 @@ class TriggerRunner:
         )
         transcript = sandbox / "transcript.jsonl"
         transcript.write_text(out.stdout, encoding="utf-8")
-        fired = self.name in invoked_skills(transcript)
+        fired = self._dsh_fired(out) if self.executor == "dsh" else self.name in invoked_skills(transcript)
         return fired, str(transcript), out.total_tokens, out.exit_code, out.duration_ms
+
+    def _dsh_fired(self, out) -> bool:
+        for call in out.tool_trace:
+            if call.name.strip().lower() != "skill":
+                continue
+            value = call.input if isinstance(call.input, dict) else {}
+            invoked = value.get("name") or value.get("skill")
+            if isinstance(invoked, str) and invoked.strip() == self.name:
+                return True
+        return False

@@ -153,6 +153,7 @@ sift freeze path/to/evals.json --name baseline
 ```bash
 sift eval path/to/skill/
 sift eval path/to/skill/ --runs 3 --model claude-sonnet-5
+sift eval path/to/skill/ --executor dsh             # 使用 DSH headless 执行题目
 sift eval path/to/skill/ --scoring programmatic   # 仅程序化，零 LLM 评分成本
 sift eval v2/ --skill-b v1/                        # v1/v2 双 skill 回归对照
 sift eval path/to/skill/ --eval-ids 3,5                  # 只跑指定 id 的题（调试/回归某几道；和 --eval-samples 互斥）
@@ -169,7 +170,8 @@ sift eval path/to/agent.md --kind agent --evals evals.json --runs 2   # agent �
 | `--skill-b` | — | v1/v2 模式：第二个 skill 路径（两边各注入各自 skill） |
 | `--no-compliance` | 开 | 跳过遵循性检查（默认开；单 run 也产，不绑 `--runs`） |
 | `--security-gate` | off | 安全审查返回 BLOCKED/REVIEW_NEEDED 时判失败 |
-| `--model` | — | claude -p 模型（也控制盲比较/赛后分析是否执行） |
+| `--executor` | cc | 题目执行器：`cc`（Claude Code）/ `dsh`（DSH headless） |
+| `--model` | — | 任务执行器模型；DSH 模式由 profile 自身模型选择控制 |
 | `--eval-samples` | — | 随机抽样跑 N 道或 pct%（如 `10` 或 `0.25`） |
 | `--eval-ids` | — | 只跑指定 id 的题（逗号分隔，如 `3,5,7`）；和 `--eval-samples`/`--changed-from` 三选一互斥 |
 | `--changed-from` | — | 改 skill 后给基线目录，自动 diff + LLM 判受影响 eval，只跑子集（回归探针；和 --eval-ids/--eval-samples 互斥） |
@@ -184,9 +186,12 @@ sift eval path/to/agent.md --kind agent --evals evals.json --runs 2   # agent �
 ```bash
 sift run path/to/skill/ --task "重构 X 模块" --cwd ./repo   # 默认 cc 执行器
 sift run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor opencode   # 改用 opencode 跑（产 transcript.json）
+sift run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor dsh        # 改用 DSH headless 跑
 ```
 
-关键参数：`--task`（必填，真任务文本）、`--cwd`（工作目录，拷贝隔离）、`--executor`（`cc`（默认）/ `opencode` / `cc,opencode`，逗号分隔各跑 `--runs` 次）、`--runs`（每任务次数）、`--model`、`--timeout`、`--max-turns`、`-o`、`--security-gate`。
+关键参数：`--task`（必填，真任务文本）、`--cwd`（工作目录，拷贝隔离）、`--executor`（`cc`（默认）/ `opencode` / `dsh` / 逗号分隔多执行器）、`--runs`（每任务次数）、`--model`、`--timeout`、`--max-turns`、`-o`、`--security-gate`。
+
+DSH 执行器通过 `SIFT_DSH_BIN`（默认 `dsh`）和 `SIFT_DSH_PROFILE`（默认 `headless`）选择二进制与 profile。DSH 自己负责模型和凭据；`SIFT_LLM_TRANSPORT` 仅控制 SIFT 的评分/分析调用。
 
 ### `gate` — 通过/失败判决
 
@@ -234,7 +239,10 @@ sift audit path/to/agent.md \
 ```bash
 sift init   path/to/skill/ --trigger-probes    # 先生成探题(should/should-not 各 5)
 sift trigger path/to/skill/ --runs 2 -o /tmp/out
+sift trigger path/to/skill/ --executor dsh --runs 1 -o /tmp/out  # 用 DSH headless 跑触发探题
 ```
+
+`--executor` 支持 `cc`（默认，扫 `.claude/skills`）和 `dsh`（DSH headless，扫 `.dsh/skills`）。DSH 模式下，只有 `tool_trace` 里出现目标 `skill` 调用才算 fired；模型/凭据由 `SIFT_DSH_PROFILE` 指定的 profile 负责。
 
 产出 `trigger-report.json` + `trigger-report.html`（人读，`--open` 浏览器打开）+ 终端摘要，**含「怎么改 description」的操作建议**：规则建议永远给（漏召→补关键词 / 误触→收窄），有失败时还自动跑一次 LLM 起草可抄改的 description 草案（全 PASS 跳过、无 flag）。终端输出 / JSON 字段 / 改法清单见 [handbook](docs/sift-handbook.md) 与 [reference](docs/sift-reference.md)。
 
