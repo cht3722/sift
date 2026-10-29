@@ -211,7 +211,22 @@ def call_http(prompt, config: LLMCallConfig, on_usage, on_progress=None, max_tok
     """
     model = config.model
     timeout = config.timeout
+    # forced tool_use 要求 object schema。未提供 schema 的调用方（init/add/coverage）
+    # 让模型把完整 JSON 文本放进 result；transport 层解包后仍返回原始 JSON 字符串。
     schema = config.schema
+    generic_text_result = schema is None
+    if generic_text_result:
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "string",
+                    "description": "The complete JSON response requested by the prompt.",
+                }
+            },
+            "required": ["result"],
+            "additionalProperties": False,
+        }
     token = resolve_anthropic_setting("ANTHROPIC_AUTH_TOKEN")
     base = resolve_anthropic_setting("ANTHROPIC_BASE_URL")
     if not token or not base:
@@ -307,6 +322,7 @@ def call_http(prompt, config: LLMCallConfig, on_usage, on_progress=None, max_tok
             f"裸 HTTP 未返回 tool_use(force 失败,thinking 撑满或 GLM 主动不调?): {str(obj)[:300]}",
             stop_reason=obj.get("stop_reason"),
         )
+    text_result = tool_items.get("result") if generic_text_result and isinstance(tool_items, dict) else None
     # warn 只打在**最终被下游消费**的截断结果上(截断但有 tool_use、要交给 parser 的)——
     # 这才是 parser 可能 parse_failed 的真风险点;升档/cc 回退路上的中间截断由进度行叙事,
     # 不打 Python UserWarning(被救回的截断满屏 warn 只会像出了 bug,真跑反馈)。
@@ -316,6 +332,8 @@ def call_http(prompt, config: LLMCallConfig, on_usage, on_progress=None, max_tok
             f"{mt_used}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
             "可能 parse_failed。"
         )
+    if isinstance(text_result, str):
+        return text_result
     return json.dumps(tool_items, ensure_ascii=False)
 
 

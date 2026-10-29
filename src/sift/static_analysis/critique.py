@@ -72,37 +72,6 @@ _NAMES = {r[0]: r[1] for r in _RUBRIC + _DESC_RUBRIC}
 _VALID_STATUS = {"met", "partial", "missing"}
 
 
-def _critique_schema(keys: list[str]) -> dict:
-    """分别生成两类评审的独立 schema，仅维度 key 枚举不同。"""
-    return {
-        "type": "object",
-        "properties": {
-            "dimensions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "key": {"type": "string", "enum": keys},
-                        "status": {"type": "string", "enum": ["met", "partial", "missing"]},
-                        "evidence": {"type": "array", "items": {"type": "string"}},
-                        "feedback": {"type": "string"},
-                        "gap": {"type": "string"},
-                    },
-                    "required": ["key", "status", "evidence", "feedback", "gap"],
-                },
-            }
-        },
-        "required": ["dimensions"],
-    }
-
-
-# forced tool_use 的 inline schema(无 $ref——GLM 等 Anthropic 兼容端点不解析 tool input_schema
-# 的 $ref,必填字段是 $ref 时模型返 {})。key/status 用枚举锁形状,evidence/feedback/gap 自由文本。
-_CRITIQUE_SCHEMA = _critique_schema(_KEYS)
-
-# description 评审用同形状 schema,仅 key 枚举换成 DESCRIPTION_DIMENSIONS(独立 call,锁自己的形状)。
-_DESC_CRITIQUE_SCHEMA = _critique_schema(DESCRIPTION_DIMENSIONS)
-
 # http 裸调用的有界重试:GLM forced tool_use 偶发返空 tool_use({})/撞 429,实锤多为瞬态,
 # 同 prompt 重试常解出(镜像 audit judge_batch_with_retry 的"调用失败 / 解析为空"重试)。
 CRITIQUE_RETRY_MAX = 2  # 空响应 / 调用失败 最多重试 2 次(共 3 次尝试)
@@ -178,7 +147,8 @@ def _build_desc_critique_prompt(name: str, description: str, subject: str = "ski
 
     description 是触发逻辑(或读者)判断「该不该用这个声明」的唯一依据,其内在质量决定能否被
     对的任务触发、被错的任务忽略。2 维 rubric(意图清晰 / 触发具体性)经验自加,无外部论文背书。
-    subject 选措辞(skill/agent),输出形状与正文评审一致(dimensions 数组),走 _DESC_CRITIQUE_SCHEMA。
+    subject 选措辞(skill/agent),输出形状与正文评审一致(dimensions 数组);HTTP transport
+    统一使用单字符串 result schema。
     """
     _t = _SUBJECT_TERMS.get(subject, _SUBJECT_TERMS["skill"])
     role, label = _t["role"], _t["label"]
@@ -368,22 +338,18 @@ def _aggregate_runs(reports: list[ContentQualityReport], skill_name: str) -> Con
     return ContentQualityReport(skill_name=skill_name, dimensions=dims)
 
 
-def _critique_call(
-    prompt: str, model: str | None, timeout: int, *, schema: dict | None = None
-) -> tuple[str | None, dict]:
-    """一次 critique LLM 调用(http 裸通道 + forced tool_use schema),含空响应 / 调用失败的
-    有界重试。
+def _critique_call(prompt: str, model: str | None, timeout: int) -> tuple[str | None, dict]:
+    """一次 critique LLM 调用,含空响应 / 调用失败的有界重试。
 
-    GLM forced tool_use 偶发返空 tool_use({})、或撞 429——实锤多为瞬态,同 prompt 重试常解出
-    (镜像 audit ``judge_batch_with_retry`` 的"调用失败 / 解析为空"重试)。529 由 ``call_claude``
-    dispatcher 内部回退 cc,这里不操心。
+    不使用复杂嵌套 forced tool schema:实测 DeepSeek Anthropic 端点在长 prompt 下会返回
+    ``tool_use`` 但 input 为 ``{}``。HTTP transport 统一使用单字符串 ``result`` schema,
+    模型把完整 JSON 放进 ``result``,这里再按既有 parser 解析。小 schema 更稳定,且
+    init/add/coverage 已使用同一模式。
 
-    ``schema``:forced tool 的 input_schema(默认正文 _CRITIQUE_SCHEMA;description 评审传
-    _DESC_CRITIQUE_SCHEMA)。返 ``(response, usage)``:``response`` 非 None = 拿到至少含一条可用
-    dimension 的响应;None = 重试耗尽(调用反复失败 / 反复退化),调用方优雅降级(空 report)。
+    返 ``(response, usage)``:``response`` 非 None = 拿到至少含一条可用 dimension 的响应;
+    None = 重试耗尽(调用反复失败 / 反复退化),调用方优雅降级(空 report)。
     ``usage`` 是最后一次尝试的 payload(failed attempt 不回调 on_usage,degenerate 的会被后续覆盖)。
     """
-    schema = _CRITIQUE_SCHEMA.copy() if schema is None else schema
     usage: dict = {}
     response: str | None = None
     for attempt in range(CRITIQUE_RETRY_MAX + 1):
@@ -393,7 +359,7 @@ def _critique_call(
             response = call_claude(
                 prompt=prompt,
                 on_usage=usage.update,
-                config=LLMCallConfig(model=model, timeout=timeout, schema=schema, transport="http"),
+                config=LLMCallConfig(model=model, timeout=timeout, transport="http"),
             )
         except (HttpRateLimited, RuntimeError):
             response = None
@@ -432,7 +398,7 @@ def _critique_once(
     rep = _parse_critique_response(body_resp, name)
     usages = [body_u]
     if desc_prompt is not None:
-        desc_resp, desc_u = _critique_call(desc_prompt, model, timeout, schema=_DESC_CRITIQUE_SCHEMA)
+        desc_resp, desc_u = _critique_call(desc_prompt, model, timeout)
         if desc_resp is not None:
             rep.dimensions.extend(_parse_critique_response(desc_resp, name, keys=DESCRIPTION_DIMENSIONS).dimensions)
             usages.append(desc_u)

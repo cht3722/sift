@@ -580,6 +580,32 @@ def test_http_call_builds_forced_tooluse_and_parses_items(monkeypatch):
     assert _j.loads(out) == [{"index": 0, "is_real": True}]  # 解包 items
 
 
+def test_http_call_schema_none_uses_result_envelope(monkeypatch):
+    """Schema-less callers receive the inner JSON string, not a result wrapper."""
+    import json as _j
+
+    import sift.llm_transport as u
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = _j.loads(req.data.decode())
+        return _FakeResp(
+            {
+                "content": [{"type": "tool_use", "input": {"result": '{"ok": true}'}}],
+                "usage": {"input_tokens": 3, "output_tokens": 2},
+            }
+        )
+
+    monkeypatch.setattr(u.urllib.request, "urlopen", fake_urlopen)
+    _http_env(monkeypatch)
+    out = u.call_http(prompt="p", on_usage=None, config=LLMCallConfig(model="m", timeout=60))
+    schema = captured["body"]["tools"][0]["input_schema"]
+    assert schema["required"] == ["result"]
+    assert set(schema["properties"]) == {"result"}
+    assert out == '{"ok": true}'
+
+
 def test_http_call_reports_usage_with_cost_zero(monkeypatch):
     """裸 API 不返 cost → payload 补 total_cost_usd=0(对齐 call_claude 形状)。"""
     import sift.llm_transport as u
