@@ -185,6 +185,9 @@ def call_dsh(
     on_progress: Callable[[str], None] | None = None,
 ) -> str:
     """Run one answer-only completion through the configured DSH headless profile."""
+    import jsonschema
+
+    from sift.errors import DshRunnerError
     from sift.execution.dsh_runner import DshRunner
     from sift.execution.options import ExecutionOptions
 
@@ -203,7 +206,13 @@ def call_dsh(
         )
     dsh_prompt = f"{prompt}\n\n" + "\n".join(instructions)
     _emit_progress(on_progress, "  ↳ dsh transport…")
-    result = DshRunner.complete(dsh_prompt, ExecutionOptions(timeout=config.timeout))
+    try:
+        result = DshRunner.complete(
+            dsh_prompt,
+            ExecutionOptions(timeout=config.timeout, on_progress=on_progress),
+        )
+    except DshRunnerError as exc:
+        raise RuntimeError(f"dsh LLM transport failed: {exc}") from exc
     if on_usage is not None and result.total_tokens > 0:
         on_usage({"input_tokens": result.total_tokens, "output_tokens": 0})
     if result.exit_code != 0:
@@ -220,6 +229,10 @@ def call_dsh(
         parsed = json.loads(candidate)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"dsh LLM transport returned invalid JSON: {exc}") from exc
+    try:
+        jsonschema.validate(parsed, schema)
+    except jsonschema.ValidationError as exc:
+        raise RuntimeError(f"dsh LLM transport returned schema-invalid JSON: {exc.message}") from exc
     return json.dumps(parsed, ensure_ascii=False)
 
 

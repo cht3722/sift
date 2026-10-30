@@ -75,3 +75,37 @@ def test_call_claude_dsh_transport_surfaces_headless_failure(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="MISSING_CREDENTIAL"):
         transport.call_claude(prompt="answer this", config=LLMCallConfig(transport="dsh"))
+
+
+def test_call_claude_dsh_transport_wraps_runner_error(monkeypatch):
+    from sift.errors import DshRunnerError
+    from sift.execution.dsh_runner import DshRunner
+
+    def fail(prompt, options):
+        raise DshRunnerError("dsh CLI not found")
+
+    monkeypatch.setattr(DshRunner, "complete", staticmethod(fail))
+    with pytest.raises(RuntimeError, match="dsh CLI not found"):
+        transport.call_claude(prompt="answer this", config=LLMCallConfig(transport="dsh"))
+
+
+def test_call_claude_dsh_transport_validates_schema(monkeypatch):
+    from sift.execution.dsh_runner import DshRunner
+
+    monkeypatch.setattr(
+        DshRunner,
+        "complete",
+        staticmethod(lambda prompt, options: _output('{"ok": "not-a-boolean"}')),
+    )
+    with pytest.raises(RuntimeError, match="schema-invalid"):
+        transport.call_claude(
+            prompt="answer this",
+            config=LLMCallConfig(
+                schema={
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                },
+                transport="dsh",
+            ),
+        )

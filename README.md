@@ -191,7 +191,7 @@ sift run path/to/skill/ --task "重构 X 模块" --cwd ./repo --executor dsh    
 
 关键参数：`--task`（必填，真任务文本）、`--cwd`（工作目录，拷贝隔离）、`--executor`（`cc`（默认）/ `opencode` / `dsh` / 逗号分隔多执行器）、`--runs`（每任务次数）、`--model`、`--timeout`、`--max-turns`、`-o`、`--security-gate`。
 
-DSH 执行器通过 `SIFT_DSH_BIN`（默认 `dsh`）和 `SIFT_DSH_PROFILE`（默认 `headless`）选择二进制与 profile。DSH 自己负责模型和凭据；`SIFT_LLM_TRANSPORT` 仅控制 SIFT 的评分/分析调用。
+DSH 执行器通过 `SIFT_DSH_BIN`（默认 `dsh`）和 `SIFT_DSH_PROFILE`（默认 `headless`）选择二进制与 profile。DSH 自己负责执行器模型和凭据；`SIFT_LLM_TRANSPORT` 控制 SIFT 自己的评分/分析调用，支持 `cc`（默认）/ `http` / `dsh`。设置 `SIFT_LLM_TRANSPORT=dsh` 时，SIFT 内部 LLM 调用也通过当前 DSH headless profile 完成。
 
 ### `gate` — 通过/失败判决
 
