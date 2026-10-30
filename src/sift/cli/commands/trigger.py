@@ -7,6 +7,7 @@ from typing import Optional
 
 import typer
 
+from sift.cli.helpers import _check_claude_or_exit, _check_dsh_or_exit
 from sift.cli.main import app, console
 from sift.cli.options import options_command
 from sift.errors import SiftError
@@ -48,6 +49,10 @@ def trigger(cli_options: TriggerCommandOptions):
         if cli_options.executor not in ("cc", "dsh"):
             console.print(f"[red]Error:[/red] trigger --executor 只支持 cc / dsh,收到 {cli_options.executor!r}")
             raise typer.Exit(code=2)
+        if cli_options.executor == "dsh":
+            _check_dsh_or_exit()
+        else:
+            _check_claude_or_exit()
         out_dir = cli_options.output or (skill_path / "evals")
         out_dir.mkdir(parents=True, exist_ok=True)
         console.print(f"Trigger-testing [bold]{name}[/bold]({len(probes)} probes × {cli_options.runs} runs)...")

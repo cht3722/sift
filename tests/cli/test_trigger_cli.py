@@ -1,5 +1,14 @@
 import json
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_executor_checks(monkeypatch):
+    """CLI tests mock TriggerRunner; executor prechecks are covered separately."""
+    monkeypatch.setattr("sift.cli.commands.trigger._check_claude_or_exit", lambda: None)
+    monkeypatch.setattr("sift.cli.commands.trigger._check_dsh_or_exit", lambda: None)
+
 
 def test_trigger_command_runs_probes_and_writes_report(tmp_path, monkeypatch):
     """trigger 命令:读 trigger_probes → TriggerRunner.run(mock)→ 写 trigger-report.json。"""
@@ -237,3 +246,51 @@ def _trigger_skill(tmp_path, skill_text, probes_json):
     (skill / "evals").mkdir()
     (skill / "evals" / "evals.json").write_text(probes_json)
     return skill
+
+
+@pytest.mark.parametrize(
+    ("executor", "check_name"),
+    [("cc", "_check_claude_or_exit"), ("dsh", "_check_dsh_or_exit")],
+)
+def test_trigger_prechecks_selected_executor(tmp_path, monkeypatch, executor, check_name):
+    from typer.testing import CliRunner
+
+    from sift.cli.main import app
+
+    skill = _trigger_skill(
+        tmp_path,
+        "---\nname: my-skill\ndescription: does X\n---\n# body\n",
+        '{"skill_name":"my-skill","evals":[],"trigger_probes":[{"id":1,"prompt":"q","expect_trigger":true}]}',
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(f"sift.cli.commands.trigger.{check_name}", lambda: calls.append(check_name))
+    monkeypatch.setattr(
+        "sift.cli.commands.trigger.TriggerRunner.run",
+        lambda self, probes, base, **kw: _successful_trigger_result(),
+    )
+
+    result = CliRunner().invoke(app, ["trigger", str(skill), "--executor", executor, "-o", str(tmp_path / "out")])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [check_name]
+
+
+def test_trigger_missing_dsh_exits_3(tmp_path, monkeypatch):
+    import typer
+    from typer.testing import CliRunner
+
+    from sift.cli.main import app
+
+    skill = _trigger_skill(
+        tmp_path,
+        "---\nname: my-skill\ndescription: does X\n---\n# body\n",
+        '{"skill_name":"my-skill","evals":[],"trigger_probes":[{"id":1,"prompt":"q","expect_trigger":true}]}',
+    )
+
+    def missing_dsh():
+        raise typer.Exit(code=3)
+
+    monkeypatch.setattr("sift.cli.commands.trigger._check_dsh_or_exit", missing_dsh)
+    result = CliRunner().invoke(app, ["trigger", str(skill), "--executor", "dsh", "-o", str(tmp_path / "out")])
+
+    assert result.exit_code == 3
