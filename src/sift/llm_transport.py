@@ -158,12 +158,69 @@ def resolve_http_model(model: str | None) -> str:
 def resolve_llm_transport(configured: str | None) -> str:
     """显式 transport 优先；否则读取 SIFT_LLM_TRANSPORT，最终回退 cc。"""
     transport = (configured or os.environ.get("SIFT_LLM_TRANSPORT") or "cc").strip().lower()
-    if transport not in {"cc", "http"}:
+    if transport not in {"cc", "http", "dsh"}:
         raise RuntimeError(
-            f"未知 LLM transport: {transport!r}；只支持 cc / http"
+            f"未知 LLM transport: {transport!r}；只支持 cc / http / dsh"
             "（可通过 SIFT_LLM_TRANSPORT 设置）"
         )
     return transport
+
+
+def _strip_code_fence(text: str) -> str:
+    value = text.strip()
+    if not value.startswith("```"):
+        return value
+    lines = value.splitlines()
+    if lines and lines[0].lstrip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def call_dsh(
+    prompt: str,
+    config: LLMCallConfig,
+    on_usage: Callable[[dict], None] | None,
+    on_progress: Callable[[str], None] | None = None,
+) -> str:
+    """Run one answer-only completion through the configured DSH headless profile."""
+    from sift.execution.dsh_runner import DshRunner
+    from sift.execution.options import ExecutionOptions
+
+    schema = config.schema
+    instructions = [
+        "This is a single-turn non-interactive generation request.",
+        "Do not call tools. Do not ask questions. Return the final answer directly.",
+    ]
+    if schema is not None:
+        instructions.extend(
+            [
+                "Return ONLY one JSON value that conforms to the following JSON Schema.",
+                "Do not wrap it in Markdown fences or add explanatory prose.",
+                json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+            ]
+        )
+    dsh_prompt = f"{prompt}\n\n" + "\n".join(instructions)
+    _emit_progress(on_progress, "  ↳ dsh transport…")
+    result = DshRunner.complete(dsh_prompt, ExecutionOptions(timeout=config.timeout))
+    if on_usage is not None and result.total_tokens > 0:
+        on_usage({"input_tokens": result.total_tokens, "output_tokens": 0})
+    if result.exit_code != 0:
+        raise RuntimeError(
+            f"dsh LLM transport failed (exit={result.exit_code}): {result.stop_reason or 'unknown error'}"
+        )
+    text = result.result_text.strip()
+    if not text:
+        raise RuntimeError("dsh LLM transport returned empty final text")
+    if schema is None:
+        return text
+    candidate = _strip_code_fence(text)
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"dsh LLM transport returned invalid JSON: {exc}") from exc
+    return json.dumps(parsed, ensure_ascii=False)
 
 
 def _pick_tool_items(obj: dict):
@@ -498,6 +555,13 @@ def call_claude(
     max_turns = config.max_turns
     transport = resolve_llm_transport(config.transport)
     max_tokens = config.max_tokens
+    if transport == "dsh":
+        return call_dsh(
+            prompt=prompt,
+            on_usage=on_usage,
+            on_progress=on_progress,
+            config=LLMCallConfig(model=model, timeout=timeout, schema=schema),
+        )
     if transport == "http":
         try:
             return call_http(

@@ -153,6 +153,11 @@ class DshRunner:
     """Run one non-interactive task through a DSH headless profile."""
 
     @staticmethod
+    def complete(prompt: str, options: ExecutionOptions = ExecutionOptions()) -> RunOutput:
+        """Run one plain prompt without injecting a Skill body."""
+        return DshRunner._run_prompt(prompt, options)
+
+    @staticmethod
     def run(prompt: str, skill_path: Path | None = None, options: ExecutionOptions = ExecutionOptions()) -> RunOutput:
         return DshRunner._run_prompt(build_live_prompt(prompt, skill_path), options)
 
