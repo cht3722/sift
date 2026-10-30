@@ -1288,3 +1288,71 @@ def _failing_runner(call_count):
         raise ClaudeRunnerError("boom")
 
     return fake_run
+
+
+def test_dsh_nonzero_output_uses_execution_failure_path(tmp_path: Path):
+    """DSH error JSON + exit 1 must become a recorded eval failure, not a normal score."""
+    from sift.execution.runner import ABTestRunner
+    from sift.models import EvalCase, RunConfig, RunOutput, ScoringConfig
+
+    skill = tmp_path / "myskill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: myskill\ndescription: d\n---\nbody\n", encoding="utf-8")
+
+    def fake_run(self, prompt, skill_path=None, options: ExecutionOptions = ExecutionOptions(), **kwargs):
+        return RunOutput(
+            exit_code=1,
+            stdout='{"type":"error","message":"spawn sift ENOENT"}\n',
+            stop_reason="spawn sift ENOENT",
+        )
+
+    config = RunConfig(
+        **_run_config_values(
+            output_dir=tmp_path / "out",
+            executor="dsh",
+            max_retries_per_eval=0,
+        )
+    )
+    runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+    eval_set = EvalSet(skill_name="myskill", evals=[EvalCase(id=1, prompt="do it")])
+
+    with patch("sift.execution.runner.DshRunner.run", fake_run):
+        runner.run_ab_test(skill, eval_set)
+
+    for side in ("with_skill", "without_skill"):
+        run_dir = tmp_path / "out" / side / "eval-1" / "run-1"
+        assert (run_dir / "error.txt").exists()
+        assert "spawn sift ENOENT" in (run_dir / "error.txt").read_text(encoding="utf-8")
+        assert (run_dir / "grading.json").exists()
+
+
+def test_dsh_runner_error_uses_execution_failure_path(tmp_path: Path):
+    """DshRunnerError from the DSH process must be handled like ClaudeRunnerError."""
+    from sift.errors import DshRunnerError
+    from sift.execution.runner import ABTestRunner
+    from sift.models import EvalCase, RunConfig, ScoringConfig
+
+    skill = tmp_path / "myskill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: myskill\ndescription: d\n---\nbody\n", encoding="utf-8")
+
+    def fake_run(self, prompt, skill_path=None, options: ExecutionOptions = ExecutionOptions(), **kwargs):
+        raise DshRunnerError("dsh headless crashed")
+
+    config = RunConfig(
+        **_run_config_values(
+            output_dir=tmp_path / "out",
+            executor="dsh",
+            max_retries_per_eval=0,
+        )
+    )
+    runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+    eval_set = EvalSet(skill_name="myskill", evals=[EvalCase(id=1, prompt="do it")])
+
+    with patch("sift.execution.runner.DshRunner.run", fake_run):
+        runner.run_ab_test(skill, eval_set)
+
+    for side in ("with_skill", "without_skill"):
+        run_dir = tmp_path / "out" / side / "eval-1" / "run-1"
+        assert "dsh headless crashed" in (run_dir / "error.txt").read_text(encoding="utf-8")
+        assert (run_dir / "grading.json").exists()

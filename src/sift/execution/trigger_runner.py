@@ -284,17 +284,22 @@ class TriggerRunner:
         return duration_ms
 
     def _sandbox_with_skill(self, base: Path, probe_id: int, run: int) -> Path:
-        """建 ``base/probe-<id>/run-<run>/`` 沙箱,把被测 skill 拷进 ``.claude/skills/<name>/``。
+        """建 ``base/probe-<id>/run-<run>/`` 沙箱,把被测 skill 拷进执行器 skill 根目录。
 
-        跳过 skill 目录里自带的 ``.claude``(避免 skill 自带 project plugin 污染隔离);
-        其余文件/子目录(含 references/scripts 等触发后 cc 会读的附件)整树拷过去。
+        跳过 runtime metadata 与 evals(避免 skill 自带 plugin 污染,并阻止默认
+        ``skill/evals`` 输出目录在 sandbox 内被递归复制);其余文件/子目录
+        (含 references/scripts 等触发后会读的附件)整树拷过去。
         """
         sandbox = base / f"probe-{probe_id}" / f"run-{run}"
         skill_root = ".dsh" if self.executor == "dsh" else ".claude"
         dst = sandbox / skill_root / "skills" / self.name
         dst.mkdir(parents=True, exist_ok=True)
+        output_root = Path(base).resolve()
         for item in self.skill_path.iterdir():
-            if item.name == ".claude":
+            if item.name in {".claude", ".dsh", "evals"}:
+                continue
+            resolved = item.resolve()
+            if resolved == output_root or output_root.is_relative_to(resolved):
                 continue
             target = dst / item.name
             if item.is_dir():

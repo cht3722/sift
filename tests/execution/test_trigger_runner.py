@@ -586,3 +586,30 @@ def _triggered_runner(monkeypatch, tmp_path, description):
     (skill / "SKILL.md").write_text(f"---\nname: my-skill\ndescription: {description}\n---\n# body\n")
     monkeypatch.setattr("sift.execution.trigger_runner.ClaudeRunner.run_trigger", fake_run_trigger)
     return TriggerRunner(skill, runs=1)
+
+
+def test_trigger_sandbox_does_not_copy_evals_or_runtime_metadata(tmp_path):
+    """Default skill/evals output must not be copied back into the sandbox."""
+    from sift.execution.trigger_runner import TriggerRunner
+
+    skill = tmp_path / "my-skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: my-skill\ndescription: does X\n---\n# body\n")
+    (skill / ".claude").mkdir()
+    (skill / ".claude" / "marker").write_text("claude")
+    (skill / ".dsh").mkdir()
+    (skill / ".dsh" / "marker").write_text("dsh")
+    (skill / "evals").mkdir()
+    (skill / "evals" / "evals.json").write_text("{}")
+    (skill / "references").mkdir()
+    (skill / "references" / "guide.txt").write_text("reference")
+
+    runner = TriggerRunner(skill, executor="dsh")
+    sandbox = runner._sandbox_with_skill(skill / "evals", probe_id=1, run=0)
+    copied_skill = sandbox / ".dsh" / "skills" / "my-skill"
+
+    assert (copied_skill / "SKILL.md").exists()
+    assert (copied_skill / "references" / "guide.txt").exists()
+    assert not (copied_skill / "evals").exists()
+    assert not (copied_skill / ".claude").exists()
+    assert not (copied_skill / ".dsh").exists()

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 from sift.audit.judge_context import AuditOptions
-from sift.errors import ClaudeRunnerError, SiftError
+from sift.errors import ClaudeRunnerError, DshRunnerError, SiftError
 from sift.execution.anomaly import (  # noqa: F401 — re-exported for backward compat
     detect_outliers,
     detect_timeout,
@@ -602,7 +602,13 @@ class ABTestRunner:
             )
             try:
                 run_output = self._execute_case(eval_case, prompt, outputs_dir, use_skill)
-            except ClaudeRunnerError as exc:
+                if run_output.exit_code != 0:
+                    reason = run_output.stop_reason or f"exit_{run_output.exit_code}"
+                    error_type = DshRunnerError if self.config.executor == "dsh" else ClaudeRunnerError
+                    raise error_type(
+                        f"{self.config.executor} exited with code {run_output.exit_code}: {reason}"
+                    )
+            except (ClaudeRunnerError, DshRunnerError) as exc:
                 return handle_execution_failure(attempt, exc)
 
             return finish_attempt(attempt, run_output)
