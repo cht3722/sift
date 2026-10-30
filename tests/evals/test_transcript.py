@@ -95,6 +95,39 @@ def test_skill_used_extracted_from_skill_tool_use(tmp_path):
     assert d.skill_used == "my-skill"
 
 
+def test_bash_result_is_attached_to_tool_trace(tmp_path):
+    records = [
+        _asst_blocks([{"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "bash scripts/check.sh"}}]),
+        {"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "b1", "content": "STATUS_OK"},
+        ]}},
+    ]
+    digest = build_digest(_write_jsonl(tmp_path, records))
+    assert digest.tool_trace[0].result == "STATUS_OK"
+
+
+def test_bash_tool_result_error_flag_is_attached_to_tool_trace(tmp_path):
+    records = [
+        _asst_blocks([{"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "bash scripts/check.sh"}}]),
+        {"message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "b1", "content": "failed", "is_error": True},
+        ]}},
+    ]
+    digest = build_digest(_write_jsonl(tmp_path, records))
+    assert digest.tool_trace[0].result == "failed"
+    assert digest.tool_trace[0].is_error is True
+
+
+def test_structured_result_blocks_are_text_in_tool_trace():
+    records = [_asst_blocks([{
+        "type": "tool_use", "id": "b1", "name": "Bash",
+        "input": {"command": "bash scripts/check.sh"},
+        "_sift_result": [{"type": "text", "text": "STATUS_OK"}],
+    }])]
+    digest = _digest_from_records(records)
+    assert digest.tool_trace[0].result == "STATUS_OK"
+
+
 def _asst(tool_uses: list) -> dict:
     return {"message": {"role": "assistant", "content": tool_uses}}
 

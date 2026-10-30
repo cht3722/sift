@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
 
 
 def extract_first_balanced(text: str, open_ch: str = "[", close_ch: str = "]") -> str | None:
@@ -116,13 +117,80 @@ def _norm_path(p: str) -> str:
     return p.lower()
 
 
+def _bash_executes_script(script_path: str, command: str) -> bool:
+    """Match a script in command position, not in an echo or another argument."""
+    if not script_path.startswith("scripts/") or not isinstance(command, str) or not command:
+        return False
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
+    lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"  # Keep unquoted newlines as command separators.
+    lexer.commenters = "#"
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    boundaries = {";", "&&", "||", "|", "&", "\n"}
+
+    def is_target(token: str) -> bool:
+        candidate = _norm_path(token)
+        target = _norm_path(script_path)
+        return candidate == target or candidate.endswith("/" + target)
+
+    def executes(segment: list[str]) -> bool:
+        index = 0
+        while index < len(segment):
+            word = segment[index]
+            if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*=.*", word):
+                index += 1
+                continue
+            name = word.rsplit("/", 1)[-1]
+            if name in {"env", "sudo", "command", "time", "nohup", "exec"}:
+                index += 1
+                if name == "command" and index < len(segment) and segment[index] in {"-v", "-V"}:
+                    return False
+                while index < len(segment) and segment[index].startswith("-"):
+                    option = segment[index]
+                    index += 2 if option in {"-u", "--unset", "-C", "--chdir", "-g", "-f"} else 1
+                continue
+            if is_target(word):
+                return True
+            interpreter = name in {"bash", "sh", "zsh", "node", "ruby", "perl", "source", "."} or bool(
+                re.fullmatch(r"(?:python|pypy)\d*(?:\.\d+)*", name)
+            )
+            if not interpreter:
+                return False
+            index += 1
+            while index < len(segment) and segment[index].startswith("-"):
+                inline_options = {"-c", "-lc", "--command"}
+                if name in {"node", "ruby", "perl"}:
+                    inline_options.update({"-e", "--eval"})
+                if name.startswith(("python", "pypy")):
+                    inline_options.add("-m")
+                if segment[index] in inline_options:
+                    return False
+                index += 1
+            return index < len(segment) and is_target(segment[index])
+        return False
+
+    segment: list[str] = []
+    for token in [*tokens, ";"]:
+        if token in boundaries:
+            if executes(segment):
+                return True
+            segment = []
+        else:
+            segment.append(token)
+    return False
+
+
 def _path_matches(script_path: str, tc) -> bool:
     """script_path 是否匹配 tc 的路径。
 
     优先结构化 ``tc.input`` 的路径字段,规范化后用**分隔符边界**比对(``==`` 或
     ``endswith("/"+sp)``)——同时解相对/绝对差异(``/workspace/r.md`` 命中 ``r.md``)和
     前缀边界(``/not-r.md`` 不被 ``r.md`` 误命中,比裸子串多修一个 bug)。无结构化
-    input(dict 风格 / 旧数据 / ``input=None``)→ 回退子串(input_summary),向后兼容。
+    ``scripts/`` 路径也识别 Bash 中实际执行的脚本。无结构化 input(dict 风格 /
+    旧数据 / ``input=None``)→ 回退子串(input_summary),向后兼容。
     """
     sp = _norm_path(script_path)
     if not sp:
@@ -136,6 +204,9 @@ def _path_matches(script_path: str, tc) -> bool:
             fp = _norm_path(val)
             if fp == sp or fp.endswith("/" + sp):
                 return True
+        tc_name = tc.name if hasattr(tc, "name") else tc.get("name", "")
+        if str(tc_name).strip().lower() == "bash" and _bash_executes_script(script_path, tc_input.get("command") or ""):
+            return True
         return False  # 有结构化 input 但路径字段不匹配 → 精确化(不回退子串歪打正着)
     tc_summary = tc.input_summary if hasattr(tc, "input_summary") else tc.get("input_summary", "")
     return sp in (tc_summary or "").lower()

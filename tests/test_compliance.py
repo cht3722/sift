@@ -217,6 +217,12 @@ class TestInstructionExtractor:
             assert r.params.get("script_path"), "REFERENCE_USAGE 须带 script_path"
 
     @staticmethod
+    def test_shell_script_path_is_labeled_as_script_use():
+        checks = InstructionExtractor().extract("## Check\n\n```bash\nbash ./scripts/check.sh\n```\n")
+        script = next(c for c in checks if c.params.get("script_path") == "scripts/check.sh")
+        assert script.instruction_text == "Use script: scripts/check.sh"
+
+    @staticmethod
     def test_reference_usage_category_collapse():
         """路由型 skill 的类别级 references/<X>(无扩展名)是互斥备选 → 合并成一条;
         否则 N 类里 N-1 个不适用的算成假 FAIL(ascendc-tiling-design 曾 1/7 假红灯)。
@@ -973,6 +979,22 @@ class TestMatchToolCall:
         """结构化 input:绝对路径 file_path 命中相对路径 script_path(相对/绝对差异)。"""
         trace = [ToolCallRecord(name="Read", input_summary="x", input={"file_path": "/workspace/references/guide.md"})]
         assert match_tool_call("", "references/guide.md", trace) is True
+
+    @staticmethod
+    def test_script_path_matches_bash_execution_but_not_a_mention():
+        def bash(command: str) -> ToolCallRecord:
+            return ToolCallRecord(name="Bash", input_summary="", input={"command": command})
+
+        assert match_tool_call("", "scripts/check.sh", [bash("cd /repo && bash /repo/scripts/check.sh 2>&1")])
+        assert match_tool_call("", "scripts/check.sh", [bash("bash -e ./scripts/check.sh")])
+        assert match_tool_call("", "scripts/check.sh", [bash("env MODE=test bash scripts/check.sh")])
+        assert match_tool_call("", "scripts/validate.py", [bash("python3 scripts/validate.py")])
+        assert not match_tool_call("", "scripts/check.sh", [bash("echo bash scripts/check.sh")])
+        assert not match_tool_call("", "scripts/check.sh", [bash("echo env bash scripts/check.sh")])
+        assert not match_tool_call("", "scripts/check.sh", [bash("echo sudo bash scripts/check.sh")])
+        assert not match_tool_call("", "scripts/check.sh", [bash("echo note # bash scripts/check.sh")])
+        assert not match_tool_call("", "scripts/check.sh", [bash("bash -c 'echo scripts/check.sh'")])
+        assert not match_tool_call("", "scripts/check.sh", [bash("bash scripts/other.sh")])
 
     @staticmethod
     def test_script_path_structured_prefix_boundary():

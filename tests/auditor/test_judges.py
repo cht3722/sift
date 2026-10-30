@@ -334,6 +334,54 @@ class TestJudgeStep:
         assert "Read" in captured["prompt"]
 
     @staticmethod
+    def test_step_prompt_includes_bash_result(monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake(prompt, *a, **k):
+            captured["prompt"] = prompt
+            return '[{"index": 0, "verdict": "pass", "evidence": "输出符合声明"}]'
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        trace = [
+            ToolCallRecord(name="Bash", input_summary='{"command": "bash scripts/check.sh"}', result="STATUS_OK"),
+            ToolCallRecord(name="Read", input_summary="notes.md", result="UNRELATED_RESULT"),
+        ]
+        TranscriptAuditor().engine.judge_step(
+            instructions=[_step_inst()],
+            evidence=JudgeTranscript(text="执行记录", name="s.jsonl", tool_trace=trace),
+            call_options=JudgeCallOptions(),
+        )
+        assert "bash scripts/check.sh" in captured["prompt"]
+        assert "STATUS_OK" in captured["prompt"]
+        assert "UNRELATED_RESULT" not in captured["prompt"]
+
+    @staticmethod
+    def test_step_prompt_keeps_middle_bash_result_and_error_status(monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake(prompt, *a, **k):
+            captured["prompt"] = prompt
+            return '[{"index": 0, "verdict": "pass", "evidence": "已核查输出"}]'
+
+        monkeypatch.setattr("sift.audit.auditor.call_claude", fake)
+        trace = [
+            ToolCallRecord(
+                name="Bash", input_summary=f"call {i}",
+                result="X" * 900 + (" MIDDLE_RESULT " if i == 5 else "") + "Y" * 100,
+                is_error=i == 5,
+            )
+            for i in range(10)
+        ]
+        TranscriptAuditor().engine.judge_step(
+            instructions=[_step_inst()],
+            evidence=JudgeTranscript(text="执行记录", name="s.jsonl", tool_trace=trace),
+            call_options=JudgeCallOptions(),
+        )
+        assert "MIDDLE_RESULT" in captured["prompt"]
+        assert "调用 #6" in captured["prompt"]
+        assert "状态: 工具报错" in captured["prompt"]
+
+    @staticmethod
     def test_no_tool_trace_omits_section(monkeypatch) -> None:
         """不传 tool_trace 时 prompt 不含工具调用段(向后兼容,现有调用不破)。
 

@@ -268,8 +268,8 @@ class InstructionExtractor:
         #   否则 N 类互斥里 N-1 个不适用的会被算成假 FAIL —— ascendc-tiling-design
         #   曾 1/7 假红灯:softmax 属 reduction,Claude 只读 reduction 是对的,另 6 类
         #   本就不适用却算 FAIL,prog 率被虚低。
-        # - 文件级(references/<X>.md 或 scripts/<X>):独立必读,各自一条查真 Read
-        #   (读 1/3 不该算全过)。
+        # - 文件级(references/<X>.md 或 scripts/<X>):各自一条查实际使用；
+        #   reference 查读取，script 可由读取或 Bash 执行满足。
         # 有序去重(set 跨进程顺序随 PYTHONHASHSEED 漂 → REFERENCE_USAGE 指令顺序随机
         # → refine/headline 缓存 key 跨进程变 = 必 miss;judge 分批(每批 _MAX_LLM_IN_BATCH
         # 条)边界也随顺序变 = verdict 跨进程漂)。按 refs(_REF_PATH_RE.findall 的确定性
@@ -303,7 +303,7 @@ class InstructionExtractor:
             checks.append(
                 InstructionCheck(
                     source=InstructionSource.REFERENCE_USAGE,
-                    instruction_text=f"Use reference file: {ref}",
+                    instruction_text=f"Use script: {ref}" if ref.startswith("scripts/") else f"Use reference file: {ref}",
                     section="References",
                     priority=InstructionPriority.RECOMMENDED,
                     # P0-1d: 查"Claude 真读了/调用了没",不是"文件在不在 output_dir"。

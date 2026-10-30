@@ -55,6 +55,16 @@ def test_add_idea_prints_token_and_duration(monkeypatch, tmp_path):
     assert any("200" in p for p in printed), printed  # 150 + 50
 
 
+def test_add_invalid_transport_exits_cleanly(monkeypatch, tmp_path):
+    """Invalid SIFT_LLM_TRANSPORT is a clean CLI error, not a raw traceback."""
+    monkeypatch.setenv("SIFT_LLM_TRANSPORT", "auto")
+    sp = _skill_with_evals(tmp_path)
+    r = runner.invoke(app, ["add", str(sp), "--idea", "test something"])
+    assert r.exit_code == 3
+    assert "未知 LLM transport" in r.output
+    assert "Traceback" not in r.output
+
+
 def _agent_with_evals(tmp_path):
     """agent 目录:.md + evals/evals.json(像 skill 的 <skill>/evals/)。"""
     adir = tmp_path / "pr-reviewer"

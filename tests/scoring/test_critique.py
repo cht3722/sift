@@ -180,9 +180,9 @@ def test_analyze_calls_claude_and_fills_body(monkeypatch, tmp_path):
     assert "执行 deploy.sh" in captured["prompt"]  # body_text 喂进去了
     assert "description" not in captured["prompt"].split("SKILL.md 正文")[1].split("##")[0]  # 不喂 frontmatter
     assert captured["config"].transport == "http"  # 走裸 HTTP(省 cc spawn + 系统 prompt)
-    schema = captured["config"].schema
-    # inline schema 透传(forced tool_use);dimensions 嵌在 properties 下
-    assert isinstance(schema, dict) and "dimensions" in schema["properties"]
+    # 复杂嵌套 schema 在长 prompt 下会被部分 Anthropic 兼容端点退化成空 input;
+    # transport 统一使用单字符串 result schema,由 prompt + parser 约束 JSON 形状。
+    assert captured["config"].schema is None
     assert len(rep.dimensions) == 6  # 4 body + 2 desc(空 description 补 missing-note)
     assert rep.token_usage.get("input_tokens") == 100  # on_usage 收了 token
     assert rep.duration_seconds >= 0.0

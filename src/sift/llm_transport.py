@@ -21,7 +21,8 @@ class LLMCallConfig(NamedTuple):
     timeout: int = 120
     schema: dict | None = None
     max_turns: int | None = None
-    transport: str = "cc"
+    # None = 跟随 SIFT_LLM_TRANSPORT；未设置时保持 cc。
+    transport: str | None = None
     max_tokens: int | None = None
 
 
@@ -154,6 +155,17 @@ def resolve_http_model(model: str | None) -> str:
     return model[:i] if i != -1 else model
 
 
+def resolve_llm_transport(configured: str | None) -> str:
+    """显式 transport 优先；否则读取 SIFT_LLM_TRANSPORT，最终回退 cc。"""
+    transport = (configured or os.environ.get("SIFT_LLM_TRANSPORT") or "cc").strip().lower()
+    if transport not in {"cc", "http"}:
+        raise RuntimeError(
+            f"未知 LLM transport: {transport!r}；只支持 cc / http"
+            "（可通过 SIFT_LLM_TRANSPORT 设置）"
+        )
+    return transport
+
+
 def _pick_tool_items(obj: dict):
     """从响应 content 抠 tool_use.input 解包(forced tool_use 应恒有;缺失返 None)。"""
     for b in obj.get("content", []):
@@ -199,7 +211,22 @@ def call_http(prompt, config: LLMCallConfig, on_usage, on_progress=None, max_tok
     """
     model = config.model
     timeout = config.timeout
+    # forced tool_use 要求 object schema。未提供 schema 的调用方（init/add/coverage）
+    # 让模型把完整 JSON 文本放进 result；transport 层解包后仍返回原始 JSON 字符串。
     schema = config.schema
+    generic_text_result = schema is None
+    if generic_text_result:
+        schema = {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "string",
+                    "description": "The complete JSON response requested by the prompt.",
+                }
+            },
+            "required": ["result"],
+            "additionalProperties": False,
+        }
     token = resolve_anthropic_setting("ANTHROPIC_AUTH_TOKEN")
     base = resolve_anthropic_setting("ANTHROPIC_BASE_URL")
     if not token or not base:
@@ -295,6 +322,17 @@ def call_http(prompt, config: LLMCallConfig, on_usage, on_progress=None, max_tok
             f"裸 HTTP 未返回 tool_use(force 失败,thinking 撑满或 GLM 主动不调?): {str(obj)[:300]}",
             stop_reason=obj.get("stop_reason"),
         )
+    text_result = tool_items.get("result") if generic_text_result and isinstance(tool_items, dict) else None
+    if generic_text_result and not isinstance(text_result, str):
+        # Some Anthropic-compatible endpoints return a tool_use block with an
+        # empty input (or omit ``result``). Treat that as a failed forced-tool
+        # call so the dispatcher can fall back instead of returning ``{}`` to
+        # callers that would silently create an empty report/eval case.
+        raise HttpNoToolUse(
+            "裸 HTTP generic result 无效(result 缺失或不是字符串): "
+            f"{str(obj)[:300]}",
+            stop_reason=obj.get("stop_reason"),
+        )
     # warn 只打在**最终被下游消费**的截断结果上(截断但有 tool_use、要交给 parser 的)——
     # 这才是 parser 可能 parse_failed 的真风险点;升档/cc 回退路上的中间截断由进度行叙事,
     # 不打 Python UserWarning(被救回的截断满屏 warn 只会像出了 bug,真跑反馈)。
@@ -304,6 +342,8 @@ def call_http(prompt, config: LLMCallConfig, on_usage, on_progress=None, max_tok
             f"{mt_used}):thinking 顶到上限,tool_use 可能不完整 → 下游 parser "
             "可能 parse_failed。"
         )
+    if isinstance(text_result, str):
+        return text_result
     return json.dumps(tool_items, ensure_ascii=False)
 
 
@@ -441,8 +481,9 @@ def call_claude(
 
     模型、超时、schema、轮次和传输设置由 ``config`` 提供；用量及进度回调独立传入。
 
-    ``transport``(代码级,默认 ``"cc"``):``"cc"`` → cc CLI(``call_cli``);
-    ``"http"`` → 裸 HTTP 直连(``call_http``,省 cc 进程 spawn + ~25k 系统 prompt/批,
+    ``transport``(代码级):显式值优先；未指定时读 ``SIFT_LLM_TRANSPORT``，最终默认
+    ``"cc"``。``"cc"`` → cc CLI(``call_cli``);``"http"`` → 裸 HTTP 直连
+    (``call_http``,省 cc 进程 spawn + ~25k 系统 prompt/批,
     forced tool_use 保 schema)。裸 HTTP 撞 529(后端过载/身份限流)/ forced tool_use 拿不到
     tool_use 块(GLM 只回 thinking / thinking 撑满 ``HTTP_MAX_TOKENS`` → ``HttpNoToolUse``)
     → 回退 cc(cc 多轮催出 + 降级文本兜底);其余 HTTP 错(4xx/timeout→RuntimeError)不回退
@@ -455,7 +496,7 @@ def call_claude(
     timeout = config.timeout
     schema = config.schema
     max_turns = config.max_turns
-    transport = config.transport
+    transport = resolve_llm_transport(config.transport)
     max_tokens = config.max_tokens
     if transport == "http":
         try:

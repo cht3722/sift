@@ -546,10 +546,11 @@ class _ProvenanceCollector:
         return effects
 
 
-def _collect_tool_results(records: list[dict]) -> tuple[dict[str, str], dict[str, int | None]]:
+def _collect_tool_results(records: list[dict]) -> tuple[dict[str, str], dict[str, int | None], dict[str, bool]]:
     """Index results before replay so results may appear before or after calls."""
     id2result: dict[str, str] = {}
     id2result_turn: dict[str, int | None] = {}
+    id2error: dict[str, bool] = {}
     for rec in records:
         msg = rec.get("message") or {}
         if msg.get("role") != "user":
@@ -560,9 +561,12 @@ def _collect_tool_results(records: list[dict]) -> tuple[dict[str, str], dict[str
         for b in content:
             if not (isinstance(b, dict) and b.get("type") == "tool_result"):
                 continue
-            id2result[b.get("tool_use_id", "")] = _result_text(b.get("content"))
-            id2result_turn[b.get("tool_use_id", "")] = rec.get("_turn_index")
-    return id2result, id2result_turn
+            tool_id = b.get("tool_use_id", "")
+            id2result[tool_id] = _result_text(b.get("content"))
+            id2result_turn[tool_id] = rec.get("_turn_index")
+            if isinstance(b.get("is_error"), bool):
+                id2error[tool_id] = b["is_error"]
+    return id2result, id2result_turn, id2error
 
 
 def _user_message_text(content: object) -> str:
@@ -616,7 +620,7 @@ class _DigestCollection:
         self.locate_turns = locate_turns
         self.provenance = _ProvenanceCollector()
         self.reconstruction = _FileReconstruction()
-        self.id2result, self.id2result_turn = _collect_tool_results(records)
+        self.id2result, self.id2result_turn, self.id2error = _collect_tool_results(records)
 
         # pass 2: walk in order
         self.user_turns: list[str] = []
@@ -751,7 +755,9 @@ class _DigestCollection:
         # Glob/Grep/WebSearch 等会被忽略。tool_trace 必须收全部,
         # audit 的工具指令对账才能按任意工具名匹配。turn=所属 record 的全局 _turn_index
         # (locate_turns=False 时置 None——turn 定位特性可选化,no-seq 形态不标 turn)。
-        self.tool_trace.append(_build_tool_call(b, rec, event, self.locate_turns))
+        self.tool_trace.append(
+            _build_tool_call(b, rec, event, self.locate_turns, self.id2result.get(tid), self.id2error.get(tid))
+        )
         # 层3:派发(task/Agent tool_use)与回报(tool_result)配对。回报在 pass 1
         # 已收进 id2result(无论回报记录在派发之前/之后出现);无回报的派发也收
         # (result_len=0,判"验收是否发生"时有用)。角色取 input.subagent_type/agent
@@ -774,7 +780,14 @@ class _DigestCollection:
         self.reconstruction.apply(name, inp, self.id2result.get(tid, ""))
 
 
-def _build_tool_call(block: dict, record: dict, event: ProvenanceEvent | None, locate_turns: bool) -> ToolCallRecord:
+def _build_tool_call(
+    block: dict,
+    record: dict,
+    event: ProvenanceEvent | None,
+    locate_turns: bool,
+    linked_result: str | None = None,
+    linked_is_error: bool | None = None,
+) -> ToolCallRecord:
     """将工具调用与可选溯源证据合并；仅 v2 输入转换校验异常。"""
     b, rec = block, record
     name = b.get("name", "")
@@ -782,6 +795,9 @@ def _build_tool_call(block: dict, record: dict, event: ProvenanceEvent | None, l
     tid = b.get("id", "")
     turn_idx = rec.get("_turn_index")
     structured_v2 = "_sift_evidence" in b
+    result = b.get("_sift_result") if b.get("_sift_result") is not None else linked_result
+    if isinstance(result, list):
+        result = _result_text(result)
     try:
         return ToolCallRecord(
             name=name,
@@ -794,9 +810,11 @@ def _build_tool_call(block: dict, record: dict, event: ProvenanceEvent | None, l
             record_timestamp=rec.get("timestamp"),
             event_id=rec.get("event_id"),
             iteration=rec.get("iteration"),
-            result=b.get("_sift_result"),
+            result=result,
             is_error=b.get("_sift_is_error")
             if b.get("_sift_is_error") is not None
+            else linked_is_error
+            if linked_is_error is not None
             else event.is_error
             if event
             else None,
