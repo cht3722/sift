@@ -368,3 +368,19 @@ def _invoke_programmatic_eval(fake_run, prefix, evals_path, out):
                 "--no-calibration",
             ],
         )
+
+
+def test_eval_unknown_executor_exits_cleanly(tmp_path: Path):
+    """Invalid --executor must be a usage error, not a Pydantic traceback."""
+    from typer.testing import CliRunner
+
+    from sift.cli.main import app
+
+    skill = _skill(tmp_path, "sk")
+    result = CliRunner().invoke(
+        app,
+        ["eval", str(skill), "--executor", "nope", "--eval-ids", "1"],
+    )
+    assert result.exit_code == 2
+    assert "只支持 cc / dsh" in result.output
+    assert "Traceback" not in result.output

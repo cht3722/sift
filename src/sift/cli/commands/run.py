@@ -342,6 +342,9 @@ class EvaluateCommandOptions:
 @options_command(app, EvaluateCommandOptions, "eval", rich_help_panel="评测")
 def evaluate(cli_options: EvaluateCommandOptions):
     """A/B 评测 skill(with/without 或 v1/v2);--kind agent 走绝对质量评测。"""
+    if cli_options.executor not in ("cc", "dsh"):
+        console.print(f"[red]Error:[/red] eval --executor 只支持 cc / dsh,收到 {cli_options.executor!r}")
+        raise typer.Exit(code=2)
     run_config = RunConfig(
         runs_per_config=cli_options.runs,
         executor=cli_options.executor,
