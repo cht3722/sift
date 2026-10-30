@@ -602,11 +602,10 @@ class ABTestRunner:
             )
             try:
                 run_output = self._execute_case(eval_case, prompt, outputs_dir, use_skill)
-                if run_output.exit_code != 0:
+                if self.config.executor == "dsh" and run_output.exit_code != 0:
                     reason = run_output.stop_reason or f"exit_{run_output.exit_code}"
-                    error_type = DshRunnerError if self.config.executor == "dsh" else ClaudeRunnerError
-                    raise error_type(
-                        f"{self.config.executor} exited with code {run_output.exit_code}: {reason}"
+                    raise DshRunnerError(
+                        f"dsh exited with code {run_output.exit_code}: {reason}"
                     )
             except (ClaudeRunnerError, DshRunnerError) as exc:
                 return handle_execution_failure(attempt, exc)

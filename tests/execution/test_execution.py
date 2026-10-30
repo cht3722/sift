@@ -1356,3 +1356,33 @@ def test_dsh_runner_error_uses_execution_failure_path(tmp_path: Path):
         run_dir = tmp_path / "out" / side / "eval-1" / "run-1"
         assert "dsh headless crashed" in (run_dir / "error.txt").read_text(encoding="utf-8")
         assert (run_dir / "grading.json").exists()
+
+
+def test_cc_nonzero_output_keeps_existing_scoring_path(tmp_path: Path):
+    """CC intentionally scores partial stream output even when its exit code is non-zero."""
+    from sift.execution.runner import ABTestRunner
+    from sift.models import EvalCase, RunConfig, RunOutput, ScoringConfig
+
+    skill = tmp_path / "myskill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: myskill\ndescription: d\n---\nbody\n", encoding="utf-8")
+
+    def fake_run(self, prompt, skill_path=None, options: ExecutionOptions = ExecutionOptions(), **kwargs):
+        return RunOutput(
+            exit_code=1,
+            stdout='{"type":"result","result":"partial"}\n',
+            transcript="partial",
+            result_text="partial",
+        )
+
+    config = RunConfig(**_run_config_values(output_dir=tmp_path / "out", max_retries_per_eval=0))
+    runner = ABTestRunner(config=config, scoring_config=ScoringConfig(enable_programmatic=False, enable_llm=False))
+    eval_set = EvalSet(skill_name="myskill", evals=[EvalCase(id=1, prompt="do it")])
+
+    with patch("sift.execution.runner.ClaudeRunner.run", fake_run):
+        runner.run_ab_test(skill, eval_set)
+
+    for side in ("with_skill", "without_skill"):
+        run_dir = tmp_path / "out" / side / "eval-1" / "run-1"
+        assert not (run_dir / "error.txt").exists()
+        assert (run_dir / "grading.json").exists()

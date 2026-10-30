@@ -67,7 +67,7 @@ def test_dsh_runner_projects_headless_events(tmp_path: Path, monkeypatch) -> Non
     assert result.total_tokens == 14
     assert result.num_turns == 1
     assert result.stop_reason == "completed"
-    assert result.tool_calls == {"read": 1}
+    assert result.tool_calls == {"Read": 1}
     assert result.tool_trace[0].tool_use_id == "call-1"
     assert result.tool_trace[0].result == "ok"
     assert "session-demo" in result.stdout

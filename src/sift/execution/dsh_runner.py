@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from sift.errors import DshRunnerError
+from sift.evals.transcript import _norm_tool
 from sift.execution.cli_runner import build_live_prompt
 from sift.execution.options import ExecutionOptions
 from sift.models import RunOutput, ToolCallRecord
@@ -102,7 +103,7 @@ def _parse_events(stdout: str) -> RunOutput:
         elif event_type == "text" and isinstance(event.get("text"), str):
             texts.append(event["text"])
         elif event_type == "tool_call":
-            name = str(event.get("tool") or "")
+            name = _norm_tool(str(event.get("tool") or ""))
             call_id = str(event.get("callId") or "")
             value = event.get("input")
             input_value = value if isinstance(value, dict) else None
